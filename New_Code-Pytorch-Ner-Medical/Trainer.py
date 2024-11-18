@@ -44,6 +44,11 @@ class Trainer(object):
                  ):
 
         super(Trainer, self).__init__()
+        # 初始化最佳指标的变量
+        self.best_acc = 0
+        self.best_precision = 0
+        self.best_recall = 0
+        self.best_f1 = 0
 
         chose = ['Bert', 'BertCrf', 'BertLstM', 'BertLstMCrf', 'BertFusionAttCrf',
                  'AlBert', 'AlBertCrf', 'AlBertLstM', 'AlBertLstMCrf', 'AlBertFusionAttCrf',
@@ -158,12 +163,10 @@ class Trainer(object):
         return train_loss
 
     def valid(self, epoch, valid_loader, test_loader, model_chose):
-        global best_acc
-        total_valid, valid_acc = 0, 0
+
         predicts, targets = [], []
         self.model.eval()
         with torch.no_grad():
-            tar, argm = [], []
             for valid_idx, valid_batch in enumerate(valid_loader):
 
                 valid_batch = [x.to(self.device) for x in valid_batch]
@@ -198,17 +201,30 @@ class Trainer(object):
                 targets.extend(ture_ids.cpu().numpy().tolist())
 
             valid_accuracy = accuracy_score(predicts, targets)
+            valid_precision = precision_score(targets, predicts, average='macro')
+            valid_recall = recall_score(targets, predicts, average='macro')
+            valid_f1 = f1_score(targets, predicts, average='macro')
 
             print('\nValid set: Accuracy: ({:.5f}), Best_Accuracy({:.5f})'.format(valid_accuracy, best_acc))
-            if valid_accuracy > best_acc:
-                best_acc = valid_accuracy
+            if valid_accuracy > self.best_acc:
+                self.best_acc = valid_accuracy
+                self.best_precision = valid_precision
+                self.best_recall = valid_recall
+                self.best_f1 = valid_f1
+
+                print('Updated best accuracy and metrics.')
+
                 print('The effect becomes better and the parameters are saved and start test...')
                 # weight = r'result/model.pt'.format(model_chose)
                 # torch.save(self.model.state_dict(), weight)
+                print('\nValid set: Accuracy: ({:.5f}), Precision: ({:.5f}), Recall: ({:.5f}), F1: ({:.5f})'.format(
+                    valid_accuracy, valid_precision, valid_recall, valid_f1))
+                print(
+                    'Best Accuracy: ({:.5f}), Best Precision: ({:.5f}), Best Recall: ({:.5f}), Best F1: ({:.5f})'.format(
+                        self.best_acc, self.best_precision, self.best_recall, self.best_f1))
 
-                self.evaluate(epoch=epoch,  # 验证机效果变好的话就测试
-                              test_loader=test_loader,
-                              model_chose=model_chose)
+
+
 
             return valid_accuracy
 
@@ -348,6 +364,13 @@ def main(model_chose, batch_size, epochs):
             train2loss.append(train_loss.detach().numpy())
             valid2acc.append(valid_acc)
 
+            # 输出最佳指标
+        print("\nBest Validation Metrics:")
+        print(f"Accuracy: {T.best_acc:.5f}")
+        print(f"Precision: {T.best_precision:.5f}")
+        print(f"Recall: {T.best_recall:.5f}")
+        print(f"F1 Score: {T.best_f1:.5f}")
+
         print("........................ Next ........................")
 
     end = time.time()
@@ -373,6 +396,7 @@ if __name__ == '__main__':
     # 'Lstm', 'LsTmCrf'                                                             # todo lstm
     best_acc = 0
 
-    main(model_chose='Bert',  # todo 改模型名称，上面选择
+    main(model_chose='BertFusionAttCrf',  # todo 改模型名称，上面选择
          batch_size=64,
          epochs=30)
+
