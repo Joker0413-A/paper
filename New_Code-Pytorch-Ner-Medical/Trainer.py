@@ -24,6 +24,12 @@ from network.BertFusionAttCRF import BertFusionAttCRFTokenClassModel
 from network.lsTm import LstModel
 from network.lsTmCRF import LsTmCRF
 
+from network.BertGRU import BertGRUTokenClassModel  # 导入 BertGRU 模型类
+from network.BertGRUCrf import BertGRUCrfTokenClassModel
+from network.AlBertGRU import AlBertGRUTokenClassModel
+from network.AlBertGRUCrf import AlBertGRUCRFTokenClassModel
+
+
 from batch_dataloader import BatchLoaderData, collate_fn
 import torch.nn as nn
 
@@ -52,13 +58,13 @@ class Trainer(object):
 
         chose = ['Bert', 'BertCrf', 'BertLstM', 'BertLstMCrf', 'BertFusionAttCrf',
                  'AlBert', 'AlBertCrf', 'AlBertLstM', 'AlBertLstMCrf', 'AlBertFusionAttCrf',
-                 'Lstm', 'LsTmCrf']
+                 'Lstm', 'LsTmCrf','BertGRU', 'BertGRUCrf','AlBertGRU','AlBertGRUCrf']
 
         if model_chose not in chose:
             raise NameError("Model_combination should be one of {}, But you have chosen '{}', please correct it".
                             format(chose, model_chose))
 
-        self.num_labels = 23
+        self.num_labels = 21
         self.batch_size = batch_size
         self.clip = -1
         self.epochs = epochs
@@ -109,6 +115,22 @@ class Trainer(object):
             model = LsTmCRF()
             self.optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
+        if model_chose == 'BertGRU':
+            model = BertGRUTokenClassModel(bert_path=bert_config)
+            self.optimizer = torch.optim.Adam(model.parameters(), lr=2e-5)  # 根据需要调整学习率
+
+        if model_chose == 'BertGRUCrf':
+            model = BertGRUCrfTokenClassModel(bert_path=bert_config)
+            self.optimizer = torch.optim.Adam(model.parameters(), lr=1e-4)  # 根据需要调整学习率
+
+        if model_chose == 'AlBertGRU':
+            model = AlBertGRUTokenClassModel(albert_path=albert_config)
+            self.optimizer = self.get_optimizer(model, lr=2e-5)
+
+        if model_chose == 'AlBertGRUCrf':
+            model = AlBertGRUCRFTokenClassModel(albert_path=albert_config)
+            self.optimizer = self.get_optimizer(model, lr=1e-4)
+
         self.model = model.to(self.device)
 
     def train(self, epoch, train_loader, len_train_set):
@@ -120,6 +142,8 @@ class Trainer(object):
             batch = [x.to(self.device) for x in batch]
             ids_list, mask_list, predict_list, lstm_array, label_list = \
                 batch[0], batch[1], batch[2], batch[3], batch[4]
+            # 打印 lstm_array 的形状
+            #print("lstm_array shape in Trainer.train:", lstm_array.shape)
 
             if self.model_chose == 'Lstm':
                 output = self.model.forward(x=lstm_array)
@@ -129,12 +153,12 @@ class Trainer(object):
                 loss_train = self.model.neg_log_likelihood(rnn_array=lstm_array,
                                                            label_ids=label_list)
 
-            if self.model_chose in ['Bert', 'BertLstM', 'AlBert', 'AlBertLstM']:
+            if self.model_chose in ['Bert', 'BertLstM', 'AlBert', 'AlBertLstM', 'BertGRU', 'AlBertGRU']:
                 output = self.model.forward(bert_ids=ids_list,
                                             bert_mask=mask_list)
                 loss_train = self.criterion(output.view(-1, self.num_labels), label_list.view(-1))
 
-            if self.model_chose in ['BertCrf', 'BertLstMCrf', 'AlBertCrf', 'AlBertLstMCrf']:
+            if self.model_chose in ['BertCrf', 'BertLstMCrf', 'AlBertCrf', 'AlBertLstMCrf', 'BertGRUCrf', 'AlBertGRUCrf']:
                 loss_train = self.model.neg_log_likelihood(input_ids=ids_list,
                                                            input_mask=mask_list,
                                                            label_ids=label_list)
@@ -144,6 +168,9 @@ class Trainer(object):
                                                            input_mask=mask_list,
                                                            lstm_array=lstm_array,
                                                            label_ids=label_list)
+
+
+
 
             loss = loss_train
             self.optimizer.zero_grad()
@@ -181,18 +208,22 @@ class Trainer(object):
                 if self.model_chose == 'LsTmCrf':
                     _, predicted = self.model.forward(rnn_array=lstm_array)
 
-                if self.model_chose in ['Bert', 'BertLstM', 'AlBert', 'AlBertLstM']:
+                if self.model_chose in ['Bert', 'BertLstM', 'AlBert', 'AlBertLstM', 'BertGRU', 'AlBertGRU']:
                     out_scores = self.model.forward(bert_ids=ids_list,
                                                     bert_mask=mask_list)
                     _, predicted = torch.max(out_scores, -1)
 
-                if self.model_chose in ['BertCrf', 'BertLstMCrf', 'AlBertCrf', 'AlBertLstMCrf']:
+                if self.model_chose in ['BertCrf', 'BertLstMCrf', 'AlBertCrf', 'AlBertLstMCrf', 'BertGRUCrf', 'AlBertGRUCrf']:
                     _, predicted = self.model.forward(input_ids=ids_list, input_mask=mask_list)
 
                 if self.model_chose in ['BertFusionAttCrf', 'AlBertFusionAttCrf']:
                     _, predicted = self.model.forward(input_ids=ids_list,
                                                       input_mask=mask_list,
                                                       lstm_array=lstm_array)
+
+                # 确保预测和掩码在相同的设备上
+                predicted = predicted.to(self.device)  # 将predicted张量移到设备上
+                predict_list = predict_list.to(self.device)  # 确保predict_list也在同一设备
 
                 predicted_list = torch.masked_select(predicted, predict_list)
                 ture_ids = torch.masked_select(label_list, predict_list)
@@ -246,12 +277,12 @@ class Trainer(object):
                 if self.model_chose == 'LsTmCrf':
                     _, predicted = self.model.forward(rnn_array=lstm_array)
 
-                if self.model_chose in ['Bert', 'BertLstM', 'AlBert', 'AlBertLstM']:
+                if self.model_chose in ['Bert', 'BertLstM', 'AlBert', 'AlBertLstM', 'BertGRU', 'AlBertGRU']:
                     out_scores = self.model.forward(bert_ids=ids_list,
                                                     bert_mask=mask_list)
                     _, predicted = torch.max(out_scores, -1)
 
-                if self.model_chose in ['BertCrf', 'BertLstMCrf', 'AlBertCrf', 'AlBertLstMCrf']:
+                if self.model_chose in ['BertCrf', 'BertLstMCrf', 'AlBertCrf', 'AlBertLstMCrf', 'BertGRUCrf', 'AlBertGRUCrf']:
                     _, predicted = self.model.forward(input_ids=ids_list, input_mask=mask_list)
 
                 if self.model_chose in ['BertFusionAttCrf', 'AlBertFusionAttCrf']:
@@ -284,10 +315,10 @@ class Trainer(object):
             file_handle.close()
 
     def move_labels(self, result_list):
-        if 21 or 22 in result_list:
+        if 19 or 20 in result_list:
             k = []
             for x in result_list:
-                if x == 21 or x == 22:
+                if x == 19 or x == 20:
                     k.append(0)
                 else:
                     k.append(x)
@@ -394,9 +425,11 @@ if __name__ == '__main__':
     # 'Bert', 'BertCrf', 'BertLstM', 'BertLstMCrf', 'BertFusionAttCrf'              # todo bert
     # 'AlBert', 'AlBertCrf', 'AlBertLstM', 'AlBertLstMCrf', 'AlBertFusionAttCrf'    # todo albert
     # 'Lstm', 'LsTmCrf'                                                             # todo lstm
+    # 'BertGRU','BertGRUCrf','AlBertGRU','AlBertGRUCrf'                             # todo GRU
     best_acc = 0
 
-    main(model_chose='BertFusionAttCrf',  # todo 改模型名称，上面选择
+    main(model_chose='AlBertGRUCrf',  # todo 改模型名称，上面选择
          batch_size=64,
          epochs=30)
+
 
