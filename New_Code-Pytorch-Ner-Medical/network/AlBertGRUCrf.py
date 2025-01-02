@@ -72,38 +72,47 @@ class AlBertGRUCRFTokenClassModel(nn.Module):
         self.attention_layer = nn.Linear(768 + 200, 1)  # ALBERT和Word2Vec拼接后的维度
 
     def get_albert_features(self, input_ids, attention_mask):
-        # 获取ALBERT的输出
+        # 1) 获取 ALBERT 输出
         outputs = self.albert(input_ids=input_ids, attention_mask=attention_mask)
-        sequence_output = outputs.last_hidden_state  # ALBERT的输出，默认在cuda上
+        sequence_output = outputs.last_hidden_state  # [batch_size, seq_len, 768]
 
-        # 使用Word2Vec为每个词获取词向量
-        word2vec_features = []
-        word_vec_tensor = []
+        # 2) 准备获取 Word2Vec 向量
+        batch_size, seq_len = input_ids.size()
+        all_word_vecs = []
 
-        for i in range(sequence_output.size(1)):  # 对每个词进行操作
-            word = input_ids[0][i].item()  # 获取词的ID
-            word_vec = self.word2vec_model.get_word_vector(word)  # 查找词向量
-            word_vec_tensor.append(word_vec)
+        # 遍历 batch 内所有样本
+        for b_idx in range(batch_size):
+            single_sample_word_vecs = []
+            # 遍历一个样本内的所有 token
+            for i in range(seq_len):
+                token_id = input_ids[b_idx][i].item()
+                # 这里 token_id 直接做 key 去查 Word2Vec
+                # 如果你的 Word2VecModel 是以 "词(字符串)"为 key，而不是 "id"，
+                # 需要先把 id -> token 映射到对应的文本词，再去查 word2vec
+                word_vec = self.word2vec_model.get_word_vector(token_id)
+                single_sample_word_vecs.append(word_vec)
 
-        # 将word_vec_tensor转换为batch_size, seq_len, word_vector_size的形状
-        word_vec_tensor = torch.tensor(word_vec_tensor, dtype=torch.float).to(
-            sequence_output.device)  # 转为tensor并保证在相同设备
-        word_vec_tensor = word_vec_tensor.unsqueeze(0).expand(sequence_output.size(0), -1,
-                                                              -1)  # 扩展为 (batch_size, seq_len, word_vector_size)
+            # [seq_len, 200] 转成 Torch tensor
+            single_sample_word_vecs = torch.tensor(single_sample_word_vecs,
+                                                   dtype=torch.float,
+                                                   device=sequence_output.device)
+            all_word_vecs.append(single_sample_word_vecs)
 
-        # 拼接ALBERT的输出和Word2Vec的向量
-        combined_output = torch.cat((sequence_output, word_vec_tensor), dim=-1)  # 拼接在最后一维
+        # 拼接成 [batch_size, seq_len, 200]
+        word_vec_tensor = torch.stack(all_word_vecs, dim=0)
 
-        # 计算注意力权重
-        attention_scores = self.attention_layer(combined_output)  # shape: [batch_size, seq_len, 1]
-        attention_weights = torch.softmax(attention_scores, dim=1)  # 计算softmax来得到每个词的注意力权重
+        # 3) 拼接 ALBERT 输出和 Word2Vec 向量 => [batch_size, seq_len, 768 + 200]
+        combined_output = torch.cat((sequence_output, word_vec_tensor), dim=-1)
 
-        # 使用注意力权重对特征进行加权
-        weighted_output = combined_output * attention_weights  # [batch_size, seq_len, hidden_size + 200]
+        # 4) 注意力计算
+        attention_scores = self.attention_layer(combined_output)  # [batch_size, seq_len, 1]
+        attention_weights = torch.softmax(attention_scores, dim=1)
+        weighted_output = combined_output * attention_weights  # [batch_size, seq_len, 968]
 
-        # 将加权后的特征传递给GRU层
-        gru_output = self.gru(weighted_output)
-        emissions = self.hidden2label(gru_output)
+        # 5) GRU -> Linear => emissions
+        gru_output = self.gru(weighted_output)  # [batch_size, seq_len, 256]
+        emissions = self.hidden2label(gru_output)  # [batch_size, seq_len, num_labels]
+
         return emissions
 
     def viterbi_decode(self, feats, mask):
